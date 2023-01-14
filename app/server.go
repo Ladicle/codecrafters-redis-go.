@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"net"
 	"os"
 )
@@ -39,6 +40,9 @@ func run() error {
 				if bytes.Contains(buf, []byte("PING")) || bytes.Contains(buf, []byte("ping")) {
 					fmt.Println("write: PONG")
 					if _, err := conn.Write([]byte("+PONG\r\n")); err != nil {
+						if err != io.EOF {
+							fmt.Printf("cannot read: %s\n", err)
+						}
 						return
 					}
 				} else {
