@@ -1,19 +1,24 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"io"
+	"log"
 	"net"
-	"os"
+	"strings"
+)
+
+const (
+	CMD_ECHO    = "echo"
+	CMD_PING    = "ping"
+	CMD_COMMAND = "command"
 )
 
 func main() {
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
-	fmt.Println("Logs from your program will appear here!")
+	log.Println("Logs from your program will appear here!")
 	if err := run(); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		log.Fatal(err)
 	}
 }
 
@@ -29,28 +34,44 @@ func run() error {
 			return fmt.Errorf("Error accepting connection: %s", err)
 		}
 		go func(c net.Conn) {
-			defer conn.Close()
-			for {
-				buf := make([]byte, 4*1024)
-				if _, err := conn.Read(buf); err != nil {
-					fmt.Println(err)
-					return
-				}
-				fmt.Printf("%s\n", buf)
-				if bytes.Contains(buf, []byte("PING")) || bytes.Contains(buf, []byte("ping")) {
-					fmt.Println("write: PONG")
-					if _, err := conn.Write([]byte("+PONG\r\n")); err != nil {
-						if err != io.EOF {
-							fmt.Printf("cannot read: %s\n", err)
-						}
-						return
-					}
-				} else {
-					if _, err := conn.Write([]byte("+OK\r\n")); err != nil {
-						return
-					}
-				}
+			if err := connHandler(c); err != nil {
+				log.Printf("ERROR: %v\n", err)
 			}
 		}(conn)
+	}
+}
+
+func connHandler(conn net.Conn) error {
+	defer conn.Close()
+	for {
+		buf := make([]byte, 4*1024)
+		n, err := conn.Read(buf)
+		if err != nil {
+			return err
+		}
+
+		req := string(buf[:n])
+		tokens := strings.Split(strings.TrimSpace(req), "\r\n")
+		log.Printf("read: %q, tokens=%+v\n", req, tokens)
+
+		var msg string
+		switch cmd := strings.ToLower(tokens[2]); cmd {
+		case CMD_PING:
+			msg = "+PONG\r\n"
+		case CMD_ECHO:
+			msg = fmt.Sprintf("$%d\r\n%s\r\n", len(tokens[4]), tokens[4])
+		case CMD_COMMAND:
+			msg = "+OK\r\n"
+		default:
+			return fmt.Errorf("unexpected command: %s", cmd)
+		}
+
+		log.Printf("write: %q\n", msg)
+		if _, err := conn.Write([]byte(msg)); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
 	}
 }
