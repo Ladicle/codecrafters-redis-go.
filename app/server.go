@@ -5,25 +5,37 @@ import (
 	"io"
 	"log"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
-	CMD_ECHO    = "echo"
-	CMD_PING    = "ping"
-	CMD_SET     = "set"
-	CMD_GET     = "get"
-	CMD_COMMAND = "command"
+	CmdEcho    = "echo"
+	CmdPing    = "ping"
+	CmdSet     = "set"
+	CmdGet     = "get"
+	CmdCommand = "command"
 )
 
+const (
+	MsgOk       = "+OK\r\n"
+	MsgBulkNull = "$-1\r\n"
+)
+
+type Data struct {
+	val string
+	exp *time.Time
+}
+
 type DataStore struct {
-	data map[string]string
+	data map[string]Data
 	mu   sync.RWMutex
 }
 
 var store = DataStore{
-	data: map[string]string{},
+	data: map[string]Data{},
 	mu:   sync.RWMutex{},
 }
 
@@ -72,22 +84,41 @@ func connHandler(conn net.Conn) error {
 
 		var msg string
 		switch cmd := strings.ToLower(tokens[2]); cmd {
-		case CMD_PING:
+		case CmdPing:
 			msg = "+PONG\r\n"
-		case CMD_ECHO:
+		case CmdEcho:
 			msg = fmt.Sprintf("$%d\r\n%s\r\n", len(tokens[4]), tokens[4])
-		case CMD_COMMAND:
-			msg = "+OK\r\n"
-		case CMD_SET:
+		case CmdCommand:
+			msg = MsgOk
+		case CmdSet:
+			key := tokens[4]
+			data := Data{val: tokens[6]}
+			if len(tokens) > 8 && strings.ToLower(tokens[8]) == "px" {
+				psms, err := strconv.Atoi(tokens[10])
+				if err != nil {
+					return err
+				}
+				exp := time.Now().Add(time.Duration(psms) * time.Millisecond)
+				data.exp = &exp
+				log.Printf("data expired at %v", exp)
+			}
 			store.mu.Lock()
-			store.data[tokens[4]] = tokens[6]
+			store.data[key] = data
 			store.mu.Unlock()
-			msg = "+OK\r\n"
-		case CMD_GET:
+			msg = MsgOk
+		case CmdGet:
 			store.mu.RLock()
-			data := store.data[tokens[4]]
+			data, ok := store.data[tokens[4]]
 			store.mu.RUnlock()
-			msg = fmt.Sprintf("+%s\r\n", data)
+			if !ok {
+				return fmt.Errorf("%s is unknown key", tokens[4])
+			}
+			if data.exp != nil && data.exp.Before(time.Now()) {
+				msg = MsgBulkNull
+				log.Printf("data is already expired at %v", data.exp)
+			} else {
+				msg = fmt.Sprintf("+%s\r\n", data.val)
+			}
 		default:
 			return fmt.Errorf("unexpected command: %s", cmd)
 		}
