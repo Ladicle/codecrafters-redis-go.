@@ -6,13 +6,26 @@ import (
 	"log"
 	"net"
 	"strings"
+	"sync"
 )
 
 const (
 	CMD_ECHO    = "echo"
 	CMD_PING    = "ping"
+	CMD_SET     = "set"
+	CMD_GET     = "get"
 	CMD_COMMAND = "command"
 )
+
+type DataStore struct {
+	data map[string]string
+	mu   sync.RWMutex
+}
+
+var store = DataStore{
+	data: map[string]string{},
+	mu:   sync.RWMutex{},
+}
 
 func main() {
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
@@ -47,6 +60,9 @@ func connHandler(conn net.Conn) error {
 		buf := make([]byte, 4*1024)
 		n, err := conn.Read(buf)
 		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
 			return err
 		}
 
@@ -62,6 +78,16 @@ func connHandler(conn net.Conn) error {
 			msg = fmt.Sprintf("$%d\r\n%s\r\n", len(tokens[4]), tokens[4])
 		case CMD_COMMAND:
 			msg = "+OK\r\n"
+		case CMD_SET:
+			store.mu.Lock()
+			store.data[tokens[4]] = tokens[6]
+			store.mu.Unlock()
+			msg = "+OK\r\n"
+		case CMD_GET:
+			store.mu.RLock()
+			data := store.data[tokens[4]]
+			store.mu.RUnlock()
+			msg = fmt.Sprintf("+%s\r\n", data)
 		default:
 			return fmt.Errorf("unexpected command: %s", cmd)
 		}
